@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+option csharp_namespace = "RAG.Infrastructure.LangChain.Protos";
+
+package langchain;
+
+// LangChain service definition
+service LangChainService {
+  rpc ProcessDocument (DocumentRequest) returns (DocumentResponse);
+  rpc QueryRAG (QueryRequest) returns (QueryResponse);
+  rpc StreamQueryRAG (QueryRequest) returns (stream QueryStreamResponse);
+}
+
+// Document processing messages
+message DocumentRequest {
+  string document_id = 1;
+  bytes document_content = 2;
+  string content_type = 3;
+  string filename = 4;
+}
+
+message DocumentResponse {
+  bool success = 1;
+  string message = 2;
+  int32 chunks_created = 3;
+}
+
+// Query messages
+message QueryRequest {
+  string query = 1;
+  int32 top_k = 2;
+  string conversation_id = 3;
+}
+
+message QueryResponse {
+  string answer = 1;
+  repeated SourceReference sources = 2;
+  int32 tokens_used = 3;
+}
+
+message SourceReference {
+  string document_id = 1;
+  string chunk_id = 2;
+  int32 page_number = 3;
+  float relevance_score = 4;
+  string preview = 5;
+}
+
+// Streaming response
+message QueryStreamResponse {
+  string chunk = 1;
+  bool is_final = 2;
+}

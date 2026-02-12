@@ -1,0 +1,72 @@
+# Prometheus Configuration for RAG Application
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'rag-local'
+    environment: 'development'
+
+# Alertmanager configuration (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  # - "alerts.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # API Gateway metrics
+  - job_name: 'gateway'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['gateway:8080']
+        labels:
+          service: 'gateway'
+          layer: 'api-gateway'
+
+  # Backend API metrics
+  - job_name: 'backend'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['backend:8080']
+        labels:
+          service: 'backend'
+          layer: 'backend-api'
+
+  # LangChain service metrics
+  - job_name: 'langchain'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['langchain:8000']
+        labels:
+          service: 'langchain'
+          layer: 'orchestration'
+
+  # Redis metrics (if redis-exporter is added)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+  #       labels:
+  #         service: 'redis'
+  #         layer: 'cache'
+
+  # MinIO metrics (if enabled)
+  # - job_name: 'minio'
+  #   metrics_path: '/minio/v2/metrics/cluster'
+  #   static_configs:
+  #     - targets: ['minio:9000']
+  #       labels:
+  #         service: 'minio'
+  #         layer: 'storage'

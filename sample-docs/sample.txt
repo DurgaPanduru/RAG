@@ -1,0 +1,19 @@
+# Sample Documents
+
+Place your sample PDF files here for testing the RAG system.
+
+The system will:
+1. Process the PDFs
+2. Split them into chunks
+3. Generate embeddings
+4. Store in ChromaDB
+5. Allow you to query them via chat
+
+Example PDFs you can add:
+- Technical documentation
+- Research papers
+- Product manuals
+- Reports
+
+Max file size: 50MB
+Supported format: PDF only

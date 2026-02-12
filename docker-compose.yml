@@ -1,0 +1,323 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # Frontend - Angular Application
+  # ==========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag-frontend
+    ports:
+      - "${FRONTEND_PORT:-4200}:80"
+    environment:
+      - API_URL=http://localhost:${GATEWAY_PORT:-5000}
+    depends_on:
+      - gateway
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # ==========================================
+  # API Gateway - YARP Reverse Proxy
+  # ==========================================
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: rag-gateway
+    ports:
+      - "${GATEWAY_PORT:-5000}:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - Backend__Url=http://backend:8080
+      - Logging__LogLevel__Default=${LOG_LEVEL:-Information}
+      - RateLimiting__RequestsPerMinute=${RATE_LIMIT_REQUESTS_PER_MINUTE:-100}
+      - Cors__AllowedOrigins=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+    depends_on:
+      - backend
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==========================================
+  # Backend - .NET 9 API
+  # ==========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    ports:
+      - "${BACKEND_PORT:-5001}:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__Redis=${REDIS_CONNECTION:-redis:6379}
+      - LangChain__GrpcUrl=http://langchain:50051
+      - LangChain__HttpUrl=http://langchain:8000
+      - MinIO__Endpoint=${MINIO_ENDPOINT:-minio:9000}
+      - MinIO__AccessKey=${MINIO_ROOT_USER:-minioadmin}
+      - MinIO__SecretKey=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MinIO__BucketName=${MINIO_BUCKET_NAME:-documents}
+      - MinIO__UseSSL=false
+      - Cache__SemanticSimilarityThreshold=${SEMANTIC_SIMILARITY_THRESHOLD:-0.92}
+      - Cache__TtlHours=${CACHE_TTL_HOURS:-24}
+      - Logging__LogLevel__Default=${LOG_LEVEL:-Information}
+      - Seq__Url=http://seq:80
+    depends_on:
+      - redis
+      - minio
+      - langchain
+      - seq
+    networks:
+      - rag-network
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==========================================
+  # LangChain Service - Python FastAPI + gRPC
+  # ==========================================
+  langchain:
+    build:
+      context: ./langchain-service
+      dockerfile: Dockerfile
+    container_name: rag-langchain
+    ports:
+      - "${LANGCHAIN_PORT:-8000}:8000"
+      - "${LANGCHAIN_GRPC_PORT:-50051}:50051"
+    environment:
+      - PYTHON_ENV=${PYTHON_ENV:-development}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CHROMA_HOST=${CHROMA_HOST:-chroma}
+      - CHROMA_PORT=${CHROMA_PORT:-8000}
+      - REDIS_URL=redis://${REDIS_CONNECTION:-redis:6379}
+      - CLAUDE_MODEL_PRIMARY=${CLAUDE_MODEL_PRIMARY:-claude-sonnet-4-5}
+      - CLAUDE_MODEL_GUARDRAILS=${CLAUDE_MODEL_GUARDRAILS:-claude-haiku-4-5}
+      - CLAUDE_MAX_TOKENS=${CLAUDE_MAX_TOKENS:-2048}
+      - CLAUDE_TEMPERATURE=${CLAUDE_TEMPERATURE:-0.7}
+      - CHUNK_SIZE=${CHUNK_SIZE:-1000}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
+      - TOP_K_RESULTS=${TOP_K_RESULTS:-5}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      - chroma
+      - redis
+    networks:
+      - rag-network
+    volumes:
+      - ./sample-docs:/app/documents:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==========================================
+  # ChromaDB - Vector Database
+  # ==========================================
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: rag-chroma
+    ports:
+      - "${CHROMA_PORT:-8001}:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - CHROMA_SERVER_AUTHN_PROVIDER=chromadb.auth.token.TokenAuthenticationServerProvider
+      - ANONYMIZED_TELEMETRY=${CHROMA_TELEMETRY_ENABLED:-false}
+    volumes:
+      - chroma-data:/chroma/chroma
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================
+  # Redis - Caching Layer
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory ${REDIS_MAXMEMORY:-2gb}
+      --maxmemory-policy ${REDIS_EVICTION_POLICY:-allkeys-lru}
+    volumes:
+      - redis-data:/data
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ==========================================
+  # MinIO - S3-Compatible Data Lake
+  # ==========================================
+  minio:
+    image: minio/minio:latest
+    container_name: rag-minio
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_BROWSER_REDIRECT_URL=http://localhost:${MINIO_CONSOLE_PORT:-9001}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MinIO Client - Create bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    container_name: rag-minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+      /usr/bin/mc mb myminio/${MINIO_BUCKET_NAME:-documents} --ignore-existing;
+      /usr/bin/mc anonymous set download myminio/${MINIO_BUCKET_NAME:-documents};
+      exit 0;
+      "
+    networks:
+      - rag-network
+
+  # ==========================================
+  # Prometheus - Metrics Collection
+  # ==========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: rag-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    volumes:
+      - ./infrastructure/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================
+  # Grafana - Monitoring Dashboards
+  # ==========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: rag-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:${GRAFANA_PORT:-3000}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
+    volumes:
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================
+  # Seq - Log Aggregation (Development)
+  # ==========================================
+  seq:
+    image: datalust/seq:latest
+    container_name: rag-seq
+    ports:
+      - "${SEQ_PORT:-5341}:80"
+    environment:
+      - ACCEPT_EULA=Y
+      - SEQ_FIRSTRUN_ADMINUSERNAME=admin
+      - SEQ_FIRSTRUN_ADMINPASSWORDHASH=
+    volumes:
+      - seq-data:/data
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# ==========================================
+# Networks
+# ==========================================
+networks:
+  rag-network:
+    driver: bridge
+    name: rag-network
+
+# ==========================================
+# Volumes
+# ==========================================
+volumes:
+  chroma-data:
+    name: rag_chroma-data
+  redis-data:
+    name: rag_redis-data
+  minio-data:
+    name: rag_minio-data
+  prometheus-data:
+    name: rag_prometheus-data
+  grafana-data:
+    name: rag_grafana-data
+  seq-data:
+    name: rag_seq-data
