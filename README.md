@@ -283,3 +283,8 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
 ---
 
 Built with ❤️ using Claude AI
+
+## 🤖 AI Contribution
+
+This feature was developed with Claude Code (AI-Contribution: 90%).
+AI-Tool: Claude Code
