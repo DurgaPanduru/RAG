@@ -288,3 +288,4 @@ Built with ❤️ using Claude AI
 
 This feature was developed with Claude Code (AI-Contribution: 90%).
 AI-Tool: Claude Code
+Add the tag "AI-Generation"
